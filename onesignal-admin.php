@@ -161,6 +161,7 @@ class OneSignal_Admin {
 		  update_post_meta($post_id, 'onesignal_send_notification', false);
 		  onesignal_debug('Set post metadata "onesignal_send_notification" to false.');
 	  }
+
   }
 
   public static function add_onesignal_post_options() {
@@ -600,6 +601,11 @@ class OneSignal_Admin {
 	      update_post_meta($post->ID, 'onesignal_meta_box_present', false);
 	      update_post_meta($post->ID, 'onesignal_send_notification', false);
 	      onesignal_debug('Removed OneSignal metadata from post.');
+
+	      // Save if the notification was sent
+	      if ( array_key_exists( 'send_onesignal_notification', $_POST ) && true == $_POST['send_onesignal_notification'] ) {
+	      	update_post_meta( $post->ID, 'onesignal_already_send', true, false );
+	      }
 
 	      /* Some WordPress environments seem to be inconsistent about whether on_save_post is called before transition_post_status
 	       * This sets the metadata back to true, and will cause a post to be sent even if the checkbox is not checked the next time
