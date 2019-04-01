@@ -5,6 +5,56 @@ defined( 'ABSPATH' ) or die('This page may not be accessed directly.');
 function onesignal_change_footer_admin() {
   return '';
 }
+/*
+ * Loads js script that includes ajax call with post id
+ */
+
+add_action('admin_enqueue_scripts', 'load_javascript');
+function load_javascript() {
+	global $post;
+    if($post){
+        wp_register_script('notice_script', plugins_url('notice.js', __FILE__), array('jquery'), '1.1', true);
+        wp_enqueue_script('notice_script');
+        wp_localize_script('notice_script', 'ajax_object', array('ajax_url' => admin_url("admin-ajax.php"), 'post_id' => $post->ID));
+    }
+}
+
+add_action( 'wp_ajax_has_metadata', 'has_metadata' );
+function has_metadata() {
+  $post_id = $_GET['post_id'];
+  
+  if(is_null($post_id)){
+    error_log("OneSignal: could not get post_id");
+    $data = array('error' => "could not get post id");
+  }else{
+    $recipients = get_post_meta($post_id, "recipients");
+    if($recipients && is_array($recipients)){
+      $recipients = $recipients[0];
+    }
+    
+    $status = get_post_meta($post_id, "status");
+    if($status && is_array($status)){
+      $status = $status[0];
+    }
+    
+    $error_message = get_post_meta($post_id, "error_message");
+    if($error_message && is_array($error_message)){
+      $error_message = $error_message[0];
+    }
+    
+    // reset meta
+    delete_post_meta($post_id, "status");
+    delete_post_meta($post_id, "recipients");
+    delete_post_meta($post_id, "error_message");
+    
+    $data =  array('recipients' => $recipients, 'status_code' => $status, 'error_message' => $error_message);
+  }
+
+  echo json_encode($data);
+
+  exit;	
+
+}
 
 class OneSignal_Admin {
   /**
@@ -245,6 +295,7 @@ class OneSignal_Admin {
     onesignal_debug('    [$meta_box_checkbox_send_notification]', 'in_array($post->post_status, array("future", "draft", "auto-draft", "pending"):', in_array($post->post_status, array("future", "draft", "auto-draft", "pending")), '(' . $post->post_status . ')');
 
     ?>
+    
 	    <input type="hidden" name="onesignal_meta_box_present" value="true"></input>
       <input type="checkbox" name="send_onesignal_notification" value="true" <?php if ($meta_box_checkbox_send_notification) { echo "checked"; } ?>></input>
       <label>
@@ -494,18 +545,46 @@ class OneSignal_Admin {
       update_option('onesignal.last_send_time', current_time('timestamp'));
   }
 
+
+/**
+ * hashes notification-title+timestamp and converts it into a uuid
+ * meant to prevent duplicate notification issue started with wp5.0.0 
+ * @title - title of post
+ * return - uuid of sha1 hash of post title + post timestamp
+ */
+public static function uuid($title) {
+  $now = explode(':', date("z:H:i"));
+  $now_minutes = $now[0] * 60 * 24 + $now[1] * 60 + $now[2];
+  $prev_minutes = get_option('TimeLastUpdated');
+  $prehash = (string)$title; 
+
+  if ($prev_minutes !== false && ($now_minutes - $prev_minutes) > 60) {
+	update_option('TimeLastUpdated', $now_minutes);
+	$timestamp = $now_minutes;
+  } else if ($prev_minutes == false) {
+	add_option('TimeLastUpdated', $now_minutes);
+	$timestamp = $now_minutes;
+  } else {
+	$timestamp = $prev_minutes;
+  }
+
+  $prehash = $prehash . $timestamp;
+
+  $sha1 = substr(sha1($prehash), 0, 32);
+  return substr($sha1, 0, 8) . '-' . substr($sha1, 8, 4) . '-' . substr($sha1, 12, 4) . '-' . substr($sha1, 16, 4) . '-' . substr($sha1, 20, 12);
+}
+
  /**
   * The main function that actually sends a notification to OneSignal.
   */
   public static function send_notification_on_wp_post($new_status, $old_status, $post) {
-    try {
+	try {
 	    if (!function_exists('curl_init')) {
 		    onesignal_debug('Canceling send_notification_on_wp_post because curl_init() is not a defined function.');
 		    return;
 	    }
 
-
-      $time_to_wait = self::get_sending_rate_limit_wait_time();
+      	    $time_to_wait = self::get_sending_rate_limit_wait_time();
 	    if ($time_to_wait > 0) {
             set_transient('onesignal_transient_error', '<div class="error notice onesignal-error-notice">
                     <p><strong>OneSignal Push:</strong><em> Please try again in ' . $time_to_wait . ' seconds. Only one notification can be sent every ' . ONESIGNAL_API_RATE_LIMIT_SECONDS . ' seconds.</em></p>
@@ -643,23 +722,24 @@ class OneSignal_Admin {
         }
 
         $fields = array(
-          'app_id'            => $onesignal_wp_settings['app_id'],
-          'headings'          => array("en" => $site_title),
-          'included_segments' => array('All'),
-          'isAnyWeb'          => true,
-          'url'               => get_permalink($post->ID),
-          'contents'          => array("en" => $notif_content)
+          "external_id"       => self::uuid($notif_content),
+          "app_id"            => $onesignal_wp_settings["app_id"],
+          "headings"          => array("en" => $site_title),
+          "included_segments" => array("All"),
+          "isAnyWeb"          => true,
+          "url"               => get_permalink($post->ID),
+          "contents"          => array("en" => $notif_content)
         );
 
         $send_to_mobile_platforms = $onesignal_wp_settings['send_to_mobile_platforms'];
         if ($send_to_mobile_platforms == true) {
-          $fields['isIos'] = true;
-          $fields['isAndroid'] = true;
+          $fields["isIos"] = true;
+          $fields["isAndroid"] = true;
         }
 
-        $config_utm_additional_url_params = $onesignal_wp_settings['utm_additional_url_params'];
+        $config_utm_additional_url_params = $onesignal_wp_settings["utm_additional_url_params"];
         if (!empty($config_utm_additional_url_params)) {
-            $fields['url'] .= '?' . $config_utm_additional_url_params;
+            $fields["url"] .= '?' . $config_utm_additional_url_params;
         }
 
         if (has_post_thumbnail($post->ID)) {
@@ -710,9 +790,6 @@ class OneSignal_Admin {
           $out = fopen('php://output', 'w');
         }
 
-	      onesignal_debug('Initializing cURL.');
-        $ch = curl_init();
-
         $onesignal_post_url = "https://onesignal.com/api/v1/notifications";
 
         if (defined('ONESIGNAL_DEBUG') && defined('ONESIGNAL_LOCAL')) {
@@ -721,38 +798,43 @@ class OneSignal_Admin {
 
         $onesignal_auth_key = $onesignal_wp_settings['app_rest_api_key'];
 
-        curl_setopt($ch, CURLOPT_URL, $onesignal_post_url);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-          'Content-Type: application/json',
-          'Authorization: Basic ' . $onesignal_auth_key
-        ));
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HEADER, false);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($fields));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 
-	      if (defined('ONESIGNAL_DEBUG')) {
-		      // Turn off host verification for localhost testing since we're using a self-signed certificate
-		      curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-	      }
+	$request = array(
+		"headers" => array(
+          		"content-type" => "application/json;charset=utf-8",
+          		"Authorization" => "Basic " . $onesignal_auth_key
+		),
+		"body" => json_encode($fields)
+	);
 
-	      if (class_exists('WDS_Log_Post')) {
-          curl_setopt($ch, CURLOPT_FAILONERROR, false);
-          curl_setopt($ch, CURLOPT_HTTP200ALIASES, array(400));
-          curl_setopt($ch, CURLOPT_VERBOSE, true);
-          curl_setopt($ch, CURLOPT_STDERR, $out);
-        }
+	$response = wp_remote_post($onesignal_post_url, $request);
 
-        $response = curl_exec($ch);
+	if ( is_wp_error($response) || !is_array( $response ) || !isset( $response['body']) ) {
+		$status = $response->get_error_code(); 				// custom code for WP_ERROR
+		error_log("There was a ".$status." error returned from OneSignal");	
+		update_post_meta($post->ID, "error_message", $response->get_error_message());
+        return;
+    } 
+    
+    if ( isset( $response['body'] ) ) {
+		$response_body = json_decode($response["body"], true);
+	}
+    
+    if ( isset( $response_body["errors"] ) ) {
+		update_post_meta($post->ID, "error_message", $response_body["errors"][0]);	
+	}
 
-        $curl_http_code     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-          onesignal_debug('$curl_http_code:', $curl_http_code);
-        if ($curl_http_code != 200) {
-          if ($curl_http_code != 0) {
-            set_transient( 'onesignal_transient_error', '<div class="error notice onesignal-error-notice">
-                    <p><strong>OneSignal Push:</strong><em> There was a ' . $curl_http_code . ' error sending your notification:</em></p>
-                    <pre>' . print_r($response, true) . '</pre>
+	if ( isset( $response['response'] ) ) {
+		$status = $response['response']['code'];
+	}
+
+
+	update_post_meta($post->ID, "status", $status);
+	
+	if ($status != 200) {
+          if ($status != 0) {	  
+		set_transient( 'onesignal_transient_error', '<div class="error notice onesignal-error-notice">
+                    <p><strong>OneSignal Push:</strong><em> There was a ' . $status . ' error sending your notification.</em></p>
                 </div>', 86400 );
           } else {
             // A 0 HTTP status code means the connection couldn't be established
@@ -760,50 +842,49 @@ class OneSignal_Admin {
                     <p><strong>OneSignal Push:</strong><em> There was an error establishing a network connection. Please make sure outgoing network connections from cURL are allowed.</em></p>
                 </div>', 86400 );
           }
-        } else {
-          $parsed_response = json_decode($response, true);
-          if (!empty($parsed_response)) {
+	} else {	
+	  if (!empty($response)) {
             onesignal_debug('OneSignal API Raw Response:', $response);
-            onesignal_debug('OneSignal API Parsed Response:', $parsed_response);
-            // API can send a 200 OK even if the notification failed to send
-            $recipient_count = $parsed_response['recipients'];
-            $sent_or_scheduled = array_key_exists('send_after', $fields) ? 'scheduled' : 'sent';
-
+	    
+	    // API can send a 200 OK even if the notification failed to send
+	    if ( isset( $response["body"]) ) {
+		    $response_body = json_decode($response["body"], true);
+		    if ( isset ( $response_body["recipients"] ) ) {
+		    	$recipient_count = $response_body["recipients"];
+		    } else {
+		    	error_log("OneSignal: recipients not set in response body");
+		    }
+	    } else {
+		    error_log("OneSignal: body not set in HTTP response");
+	    }
+	    
+	    // updates meta so that recipient count is available for GET request from client 
+	    update_post_meta($post->ID, "recipients", $recipient_count);	
+	    
+	    $sent_or_scheduled = array_key_exists('send_after', $fields) ? 'scheduled' : 'sent';
             $config_show_notification_send_status_message = $onesignal_wp_settings['show_notification_send_status_message'] == "1";
 
             if ($config_show_notification_send_status_message) {
               if ($recipient_count != 0) {
-                set_transient('onesignal_transient_success', '<div class="updated notice notice-success is-dismissible">
-                        <p><strong>OneSignal Push:</strong><em> Successfully ' . $sent_or_scheduled . ' a notification to ' . $parsed_response['recipients'] . ' recipients.</em></p>
+		      set_transient('onesignal_transient_success', '<div class="components-notice is-success is-dismissible">
+			      <div class="components-notice__content">
+			      <p><strong>OneSignal Push:</strong><em> Successfully ' . $sent_or_scheduled . ' a notification to ' . $recipient_count . ' recipients.</em></p>
+			      </div>
                     </div>', 86400);
               } else {
                 set_transient('onesignal_transient_success', '<div class="updated notice notice-success is-dismissible">
-                        <p><strong>OneSignal Push:</strong><em> A notification was ' . $sent_or_scheduled . ', but there were no recipients.</em></p>
+                        <p><strong>OneSignal Push:</strong><em>There were no recipients. You either 1) have no subscribers yet or 2) you hit the rate-limit. Please try again in an hour.</em></p>
                     </div>', 86400);
               }
             }
           }
         }
 
-	      if (defined('ONESIGNAL_DEBUG') || class_exists('WDS_Log_Post')) {
+	if (defined('ONESIGNAL_DEBUG') || class_exists('WDS_Log_Post')) {
           fclose($out);
           $debug_output = ob_get_clean();
 
-          $curl_effective_url = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
-          $curl_total_time    = curl_getinfo($ch, CURLINFO_TOTAL_TIME);
-
-          onesignal_debug('OneSignal API POST Data:', $fields);
-          onesignal_debug('OneSignal API URL:', $curl_effective_url);
-          onesignal_debug('OneSignal API Response Status Code:', $curl_http_code);
-	        if ($curl_http_code != 200) {
-		        onesignal_debug('cURL Request Time:', $curl_total_time, 'seconds');
-		        onesignal_debug('cURL Error Number:', curl_errno($ch));
-		        onesignal_debug('cURL Error Description:', curl_error($ch));
-		        onesignal_debug('cURL Response:', print_r($response, true));
-		        onesignal_debug('cURL Verbose Log:', $debug_output);
-	        }
         }
-	      curl_close($ch);
 
         self::update_last_sent_timestamp();
 
