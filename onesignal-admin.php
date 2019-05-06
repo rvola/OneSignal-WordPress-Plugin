@@ -558,7 +558,7 @@ public static function uuid($title) {
   $prev_minutes = get_option('TimeLastUpdated');
   $prehash = (string)$title; 
 
-  if ($prev_minutes !== false && ($now_minutes - $prev_minutes) > 60) {
+  if ($prev_minutes !== false && ($now_minutes - $prev_minutes) > 2) {
 	update_option('TimeLastUpdated', $now_minutes);
 	$timestamp = $now_minutes;
   } else if ($prev_minutes == false) {
@@ -800,19 +800,21 @@ public static function uuid($title) {
 
 
 	$request = array(
-		"headers" => array(
+    "headers" => array(
           		"content-type" => "application/json;charset=utf-8",
           		"Authorization" => "Basic " . $onesignal_auth_key
 		),
-		"body" => json_encode($fields)
+    "body" => json_encode($fields),
+    "timeout" => 60
 	);
 
 	$response = wp_remote_post($onesignal_post_url, $request);
 
-	if ( is_wp_error($response) || !is_array( $response ) || !isset( $response['body']) ) {
-		$status = $response->get_error_code(); 				// custom code for WP_ERROR
-		error_log("There was a ".$status." error returned from OneSignal");	
-		update_post_meta($post->ID, "error_message", $response->get_error_message());
+    if ( is_wp_error($response) || !is_array( $response ) || !isset( $response['body']) ) {
+        $status = $response->get_error_code(); 				// custom code for WP_ERROR
+        $error_message = $response->get_error_message();
+        error_log("There was a ".$status." error returned from OneSignal: ".$error_message);	
+        update_post_meta($post->ID, "error_message", $error_message);
         return;
     } 
     
@@ -828,12 +830,17 @@ public static function uuid($title) {
 		$status = $response['response']['code'];
 	}
 
+    if ($response_body['recipients'] == "0") {
+        update_post_meta($post->ID, "error_message", json_encode($response_body));
+    }
 
 	update_post_meta($post->ID, "status", $status);
 	
 	if ($status != 200) {
+    error_log("There was a ".$status." error sending your notification.");
+    error_log("Response from OneSignal:", json_encode($response));
           if ($status != 0) {	  
-		set_transient( 'onesignal_transient_error', '<div class="error notice onesignal-error-notice">
+		        set_transient( 'onesignal_transient_error', '<div class="error notice onesignal-error-notice">
                     <p><strong>OneSignal Push:</strong><em> There was a ' . $status . ' error sending your notification.</em></p>
                 </div>', 86400 );
           } else {
@@ -866,10 +873,10 @@ public static function uuid($title) {
 
             if ($config_show_notification_send_status_message) {
               if ($recipient_count != 0) {
-		      set_transient('onesignal_transient_success', '<div class="components-notice is-success is-dismissible">
-			      <div class="components-notice__content">
-			      <p><strong>OneSignal Push:</strong><em> Successfully ' . $sent_or_scheduled . ' a notification to ' . $recipient_count . ' recipients.</em></p>
-			      </div>
+                set_transient('onesignal_transient_success', '<div class="components-notice is-success is-dismissible">
+                  <div class="components-notice__content">
+                  <p><strong>OneSignal Push:</strong><em> Successfully ' . $sent_or_scheduled . ' a notification to ' . $recipient_count . ' recipients.</em></p>
+                  </div>
                     </div>', 86400);
               } else {
                 set_transient('onesignal_transient_success', '<div class="updated notice notice-success is-dismissible">
