@@ -211,7 +211,6 @@ class OneSignal_Admin {
 		  update_post_meta($post_id, 'onesignal_send_notification', false);
 		  onesignal_debug('Set post metadata "onesignal_send_notification" to false.');
 	  }
-
   }
 
   public static function add_onesignal_post_options() {
@@ -558,7 +557,7 @@ public static function uuid($title) {
   $prev_minutes = get_option('TimeLastUpdated');
   $prehash = (string)$title; 
 
-  if ($prev_minutes !== false && ($now_minutes - $prev_minutes) > 2) {
+  if ($prev_minutes !== false && ($now_minutes - $prev_minutes) > 60) {
 	update_option('TimeLastUpdated', $now_minutes);
 	$timestamp = $now_minutes;
   } else if ($prev_minutes == false) {
