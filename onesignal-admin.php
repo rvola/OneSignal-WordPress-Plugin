@@ -199,7 +199,7 @@ class OneSignal_Admin
         }
 
 	    // Save if the notification was sent
-	    if ( array_key_exists( 'send_onesignal_notification', $_POST ) && true == $_POST['send_onesignal_notification'] ) {
+	    if ( array_key_exists( 'send_onesignal_notification', $_REQUEST ) && true == $_REQUEST['send_onesignal_notification'] ) {
 		    update_post_meta( $post->ID, 'onesignal_already_send', true, false );
 	    }
 
