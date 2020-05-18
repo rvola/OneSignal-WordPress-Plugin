@@ -197,6 +197,12 @@ class OneSignal_Admin
         } else {
             update_post_meta($post_id, 'onesignal_send_notification', false);
         }
+
+	    // Save if the notification was sent
+	    if ( array_key_exists( 'send_onesignal_notification', $_POST ) && true == $_POST['send_onesignal_notification'] ) {
+		    update_post_meta( $post->ID, 'onesignal_already_send', true, false );
+	    }
+
     }
 
     public static function add_onesignal_post_options()
